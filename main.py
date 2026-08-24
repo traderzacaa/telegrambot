@@ -5,15 +5,14 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ContentType
 from aiogram.enums import ParseMode
 import asyncio
+import re
 
-# ================== SOZLAMALAR ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 6606071265
 
 VISA = "4023 0601 4330 7436"
 MASTERCARD = "5476 3815 0507 5414"
 CARD_NAME = "ASLBEK ZIYODULLAYEV"
-# ================================================
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -24,23 +23,24 @@ user_data = {}
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     args = message.text.split(maxsplit=1)
-    amount = "5.00"
+    
+    amount = "5"
     position = "?"
     url = "—"
 
     if len(args) > 1:
         payload = args[1]
-        try:
-            parts = payload.split("_")
-            for i, part in enumerate(parts):
-                if part == "amount" and i + 1 < len(parts):
-                    amount = parts[i + 1]
-                if part == "pos" and i + 1 < len(parts):
-                    position = parts[i + 1]
-                if part == "url" and i + 1 < len(parts):
-                    url = "_".join(parts[i + 1:])
-        except:
-            pass
+        # amount_12_pos_3_url_example.com
+        amount_match = re.search(r'amount_(\d+)', payload)
+        pos_match = re.search(r'pos_(\d+)', payload)
+        url_match = re.search(r'url_(.+)', payload)
+
+        if amount_match:
+            amount = amount_match.group(1)
+        if pos_match:
+            position = pos_match.group(1)
+        if url_match:
+            url = url_match.group(1).replace('_', ' ')
 
     user_data[message.from_user.id] = {
         "amount": amount,
@@ -76,7 +76,7 @@ async def start_handler(message: Message):
 @dp.message(lambda message: message.content_type == ContentType.PHOTO or message.content_type == ContentType.DOCUMENT)
 async def check_handler(message: Message):
     user_id = message.from_user.id
-    data = user_data.get(user_id, {"amount": "5.00", "position": "?", "url": "—"})
+    data = user_data.get(user_id, {"amount": "5", "position": "?", "url": "—"})
 
     await message.answer("Чек получен ✅\n\nВаш платёж проверяется.\nОбычно это занимает 5–15 минут.\n\nПожалуйста, подождите.")
 
