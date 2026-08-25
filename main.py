@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 import asyncio
 from supabase import create_client
 
-# SUPABASE SOZLAMALARI (Tuzatilgan anon key bilan)
+# SUPABASE SOZLAMALARI
 SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0Z3RtZW9kdHVpbWp2cW9xZnpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MDM3NDYsImV4cCI6MjEwMzE3OTc0Nn0.XiW-O2-TQ5m_7yyj7ZNAWJwPHZYMXekpZ9AaaZyfnRg"
 
@@ -18,6 +18,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 6606071265
 
+# KARTALAR
+UZCARD = "5614 6821 1178 0714"
 VISA = "4023 0601 4330 7436"
 MASTERCARD = "5476 3815 0507 5414"
 CARD_NAME = "ASLBEK ZIYODULLAYEV"
@@ -28,10 +30,16 @@ dp = Dispatcher()
 
 user_data = {}
 
+def format_money(amount):
+    try:
+        return f"{int(amount):,}".replace(",", " ")
+    except:
+        return amount
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     args = message.text.split(maxsplit=1)
-    amount = "5"
+    amount = "10000"
     cat = "other"
     url = "—"
 
@@ -57,20 +65,29 @@ async def start_handler(message: Message):
         "url": url
     }
 
+    formatted_sum = format_money(amount)
+
     text = f"""Здравствуйте!
 
 Вы хотите занять место в рейтинге <b>BIDmesto</b>.
 
-Сумма к оплате: <b>${amount}</b>
+Сумма к оплате: <b>{formatted_sum} so'm</b>
 Сайт: <b>{url}</b>
 
-Переведите <b>точную сумму</b> на карту:
+Переведите <b>точную сумму</b> на удобную карту:
 
-<b>Visa:</b> <code>{VISA}</code>
-<b>Mastercard:</b> <code>{MASTERCARD}</code>
+<b>Uzcard:</b>
+<code>{UZCARD}</code>
+
+<b>Visa:</b>
+<code>{VISA}</code>
+
+<b>Mastercard:</b>
+<code>{MASTERCARD}</code>
+
 Получатель: <b>{CARD_NAME}</b>
 
-После оплаты отправьте сюда <b>чек</b> (скриншот)."""
+После оплаты отправьте сюда <b>чек</b> (скриншот или фото квитанции)."""
 
     await message.answer(text, parse_mode=ParseMode.HTML)
 
@@ -78,13 +95,14 @@ async def start_handler(message: Message):
 @dp.message(F.photo | F.document)
 async def check_handler(message: Message):
     user_id = message.from_user.id
-    data = user_data.get(user_id, {"amount": "5", "cat": "other", "url": "—"})
+    data = user_data.get(user_id, {"amount": "10000", "cat": "other", "url": "—"})
+    formatted_sum = format_money(data['amount'])
 
     await message.answer("Чек получен ✅\n\nВаш платёж проверяется. Пожалуйста, подождите.")
 
     caption = f"""🔔 <b>Новый платёж</b>
 
-Сумма: <b>${data['amount']}</b>
+Сумма: <b>{formatted_sum} so'm</b>
 Категория: <b>{data['cat']}</b>
 Сайт: <b>{data['url']}</b>
 Пользователь: @{message.from_user.username or 'нет'} (ID: {user_id})
@@ -109,14 +127,14 @@ async def process_callback(callback: CallbackQuery):
     user_id = int(user_id)
 
     if action == "confirm":
-        data = user_data.get(user_id, {"amount": "5", "cat": "other", "url": "https://bidmesto.lol"})
+        data = user_data.get(user_id, {"amount": "10000", "cat": "other", "url": "https://bidmesto.lol"})
+        formatted_sum = format_money(data['amount'])
         
         try:
             bid_val = int(data['amount'])
             url_val = str(data['url'])
             cat_val = str(data['cat'])
 
-            # BAZAGA YOZISH
             data_to_insert = {
                 'url': url_val,
                 'cat': cat_val,
@@ -128,11 +146,11 @@ async def process_callback(callback: CallbackQuery):
             res = supabase.table('entries').insert(data_to_insert).execute()
             logging.info(f"Muvaffaqiyatli saqlandi: {res}")
             
-            await bot.send_message(user_id, "Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto: https://bidmesto.lol")
+            await bot.send_message(user_id, f"Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto: https://bidmesto.lol")
             
             old_caption = callback.message.caption or ""
             await callback.message.edit_caption(
-                caption=old_caption + f"\n\n✅ <b>Подтверждено (${data['amount']}) - Bazaga yozildi!</b>", 
+                caption=old_caption + f"\n\n✅ <b>Подтверждено ({formatted_sum} so'm)</b>", 
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
