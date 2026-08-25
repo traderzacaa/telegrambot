@@ -1,5 +1,6 @@
 import os
 import logging
+import base64
 import urllib.parse
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
@@ -38,18 +39,23 @@ async def start_handler(message: Message):
     if len(args) > 1:
         payload = args[1]
         
-        # 'bid_25_cat_ai_url_https...' matnini xatosiz ajratib olish
+        # Format: b_25_c_ai_u_aHR0cHM...
         try:
-            if "bid_" in payload and "_cat_" in payload and "_url_" in payload:
-                # bid va qolgan qismini ajratamiz
-                part_bid, rest1 = payload.split("_cat_", 1)
-                amount = part_bid.replace("bid_", "").strip()
+            parts = payload.split("_")
+            if len(parts) >= 6 and parts[0] == "b" and parts[2] == "c" and parts[4] == "u":
+                amount = parts[1]
+                cat = parts[3]
                 
-                # cat va url qismini ajratamiz
-                cat, raw_url = rest1.split("_url_", 1)
-                url = urllib.parse.unquote(raw_url).strip()
+                # Base64 orqali shifrlangan URL'ni qayta tiklaymiz
+                encoded_url = parts[5]
+                missing_padding = len(encoded_url) % 4
+                if missing_padding:
+                    encoded_url += '=' * (4 - missing_padding)
+                
+                decoded_bytes = base64.b64decode(encoded_url)
+                url = urllib.parse.unquote(decoded_bytes.decode('utf-8'))
         except Exception as e:
-            logging.error(f"Payload parse error: {e}")
+            logging.error(f"Payload dekodlashda xato: {e}")
 
     # Foydalanuvchi ma'lumotlarini saqlaymiz
     user_data[message.from_user.id] = {
@@ -127,9 +133,9 @@ async def process_callback(callback: CallbackQuery):
                 'name': data['url'],
                 'clicks': 0
             }).execute()
-            logging.info(f"Supabase success: {data['url']}")
+            logging.info(f"Supabase'ga joylandi: {data['url']}")
         except Exception as e:
-            logging.error(f"Supabase Error: {e}")
+            logging.error(f"Supabase Xatolik: {e}")
 
         await bot.send_message(user_id, 
             "Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto.\n\nСпасибо за оплату!\nПроверить можно здесь: https://bidmesto.lol")
