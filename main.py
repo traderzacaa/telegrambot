@@ -9,9 +9,10 @@ from aiogram.enums import ParseMode
 import asyncio
 from supabase import create_client
 
-# Supabase Sozlamalari
+# SUPABASE SOZLAMALARI (Tuzatilgan anon key bilan)
 SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
-SUPABASE_KEY = "sb_publishable_rRnaaXbZYHD3ZOmz2pFsEA_31X9MzLz"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0Z3RtZW9kdHVpbWp2cW9xZnpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MDM3NDYsImV4cCI6MjEwMzE3OTc0Nn0.XiW-O2-TQ5m_7yyj7ZNAWJwPHZYMXekpZ9AaaZyfnRg"
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -25,38 +26,31 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Foydalanuvchi ma'lumotlarini saqlash
 user_data = {}
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     args = message.text.split(maxsplit=1)
-    
     amount = "5"
     cat = "other"
     url = "—"
 
     if len(args) > 1:
         payload = args[1]
-        
         try:
             parts = payload.split("_")
             if len(parts) >= 6 and parts[0] == "b" and parts[2] == "c" and parts[4] == "u":
                 amount = parts[1]
                 cat = parts[3]
-                
-                # Base64 URL dekodlash
                 encoded_url = parts[5]
                 missing_padding = len(encoded_url) % 4
                 if missing_padding:
                     encoded_url += '=' * (4 - missing_padding)
-                
                 decoded_bytes = base64.b64decode(encoded_url)
                 url = urllib.parse.unquote(decoded_bytes.decode('utf-8'))
         except Exception as e:
-            logging.error(f"Payload dekodlashda xato: {e}")
+            logging.error(f"Payload xato: {e}")
 
-    # Foydalanuvchi ma'lumotlarini vaqtinchalik saqlaymiz
     user_data[message.from_user.id] = {
         "amount": amount,
         "cat": cat,
@@ -70,19 +64,13 @@ async def start_handler(message: Message):
 Сумма к оплате: <b>${amount}</b>
 Сайт: <b>{url}</b>
 
-Переведите <b>точную сумму</b> на одну из карт:
+Переведите <b>точную сумму</b> на карту:
 
-<b>Visa:</b>
-<code>{VISA}</code>
-
-<b>Mastercard:</b>
-<code>{MASTERCARD}</code>
-
+<b>Visa:</b> <code>{VISA}</code>
+<b>Mastercard:</b> <code>{MASTERCARD}</code>
 Получатель: <b>{CARD_NAME}</b>
 
-После оплаты отправьте сюда <b>чек</b> (скриншот или фото квитанции).
-
-Мы проверим платёж в течение 5–15 минут."""
+После оплаты отправьте сюда <b>чек</b> (скриншот)."""
 
     await message.answer(text, parse_mode=ParseMode.HTML)
 
@@ -92,7 +80,7 @@ async def check_handler(message: Message):
     user_id = message.from_user.id
     data = user_data.get(user_id, {"amount": "5", "cat": "other", "url": "—"})
 
-    await message.answer("Чек получен ✅\n\nВаш платёж проверяется.\nОбычно это занимает 5–15 минут.\n\nПожалуйста, подождите.")
+    await message.answer("Чек получен ✅\n\nВаш платёж проверяется. Пожалуйста, подождите.")
 
     caption = f"""🔔 <b>Новый платёж</b>
 
@@ -123,44 +111,39 @@ async def process_callback(callback: CallbackQuery):
     if action == "confirm":
         data = user_data.get(user_id, {"amount": "5", "cat": "other", "url": "https://bidmesto.lol"})
         
-        # SUPABASE BAZASIGA YOZISH (Tuzatilgan qism)
         try:
             bid_val = int(data['amount'])
             url_val = str(data['url'])
             cat_val = str(data['cat'])
 
-            res = supabase.table('entries').insert({
+            # BAZAGA YOZISH
+            data_to_insert = {
                 'url': url_val,
                 'cat': cat_val,
                 'bid': bid_val,
                 'name': url_val,
                 'clicks': 0
-            }).execute()
+            }
             
-            logging.info(f"Supabase bazasiga muvaffaqiyatli saqlandi: {res}")
+            res = supabase.table('entries').insert(data_to_insert).execute()
+            logging.info(f"Muvaffaqiyatli saqlandi: {res}")
+            
+            await bot.send_message(user_id, "Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto: https://bidmesto.lol")
+            
+            old_caption = callback.message.caption or ""
+            await callback.message.edit_caption(
+                caption=old_caption + f"\n\n✅ <b>Подтверждено (${data['amount']}) - Bazaga yozildi!</b>", 
+                parse_mode=ParseMode.HTML
+            )
         except Exception as e:
-            logging.error(f"Supabase bazaga yozishda XATOLIK yuz berdi: {e}")
-
-        await bot.send_message(user_id, 
-            "Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto.\n\nСпасибо за оплату!\nПроверить можно здесь: https://bidmesto.lol")
-        
-        old_caption = callback.message.caption or ""
-        await callback.message.edit_caption(
-            caption=old_caption + f"\n\n✅ <b>Подтверждено (${data['amount']})</b>", 
-            parse_mode=ParseMode.HTML
-        )
+            logging.error(f"Xato: {e}")
+            await callback.message.answer(f"⚠️ **Bazaga yozishda xatolik:**\n`{e}`", parse_mode=ParseMode.MARKDOWN)
     else:
-        await bot.send_message(user_id, 
-            "К сожалению, платёж не подтверждён.\n\nВозможные причины:\n• Неверная сумма\n• Нечёткий чек\n• Оплата не поступила\n\nПожалуйста, отправьте чек ещё раз.")
-        
+        await bot.send_message(user_id, "К сожалению, платёж не подтверждён.")
         old_caption = callback.message.caption or ""
-        await callback.message.edit_caption(
-            caption=old_caption + "\n\n❌ <b>Отклонено</b>", 
-            parse_mode=ParseMode.HTML
-        )
+        await callback.message.edit_caption(caption=old_caption + "\n\n❌ <b>Отклонено</b>", parse_mode=ParseMode.HTML)
 
     await callback.answer()
-
 
 async def main():
     await dp.start_polling(bot)
