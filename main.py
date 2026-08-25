@@ -6,6 +6,12 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.enums import ParseMode
 import asyncio
 import re
+from supabase import create_client
+
+# Supabase Sozlamalari
+SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
+SUPABASE_KEY = "sb_publishable_rRnaaXbZYHD3ZOmz2pFsEA_31X9MzLz"
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 6606071265
@@ -25,26 +31,26 @@ async def start_handler(message: Message):
     args = message.text.split(maxsplit=1)
     
     amount = "5"
-    position = "?"
+    cat = "other"
     url = "—"
 
     if len(args) > 1:
         payload = args[1]
-        # amount_12_pos_3_url_example.com
-        amount_match = re.search(r'amount_(\d+)', payload)
-        pos_match = re.search(r'pos_(\d+)', payload)
+        # Format: bid_5_cat_ai_url_https...
+        amount_match = re.search(r'bid_(\d+)', payload)
+        cat_match = re.search(r'cat_([^_]+)', payload)
         url_match = re.search(r'url_(.+)', payload)
 
         if amount_match:
             amount = amount_match.group(1)
-        if pos_match:
-            position = pos_match.group(1)
+        if cat_match:
+            cat = cat_match.group(1)
         if url_match:
             url = url_match.group(1).replace('_', ' ')
 
     user_data[message.from_user.id] = {
         "amount": amount,
-        "position": position,
+        "cat": cat,
         "url": url
     }
 
@@ -52,7 +58,6 @@ async def start_handler(message: Message):
 
 Вы хотите занять место в рейтинге <b>BIDmesto</b>.
 
-Место: <b>#{position}</b>
 Сумма к оплате: <b>${amount}</b>
 Сайт: <b>{url}</b>
 
@@ -76,14 +81,14 @@ async def start_handler(message: Message):
 @dp.message(lambda message: message.content_type == ContentType.PHOTO or message.content_type == ContentType.DOCUMENT)
 async def check_handler(message: Message):
     user_id = message.from_user.id
-    data = user_data.get(user_id, {"amount": "5", "position": "?", "url": "—"})
+    data = user_data.get(user_id, {"amount": "5", "cat": "other", "url": "—"})
 
     await message.answer("Чек получен ✅\n\nВаш платёж проверяется.\nОбычно это занимает 5–15 минут.\n\nПожалуйста, подождите.")
 
     caption = f"""🔔 <b>Новый платёж</b>
 
 Сумма: <b>${data['amount']}</b>
-Место: <b>#{data['position']}</b>
+Категория: <b>{data['cat']}</b>
 Сайт: <b>{data['url']}</b>
 Пользователь: @{message.from_user.username or 'нет'} (ID: {user_id})
 """
@@ -107,13 +112,28 @@ async def process_callback(callback: CallbackQuery):
     user_id = int(user_id)
 
     if action == "confirm":
+        # Foydalanuvchi ma'lumotlarini olish
+        data = user_data.get(user_id, {"amount": 5, "cat": "other", "url": "https://bidmesto.lol"})
+        
+        # SUPABASE BAZASIGA YOZISH (SAYTDA AVTOMATIK KO'RINADI)
+        try:
+            supabase.table('entries').insert({
+                'url': data['url'],
+                'cat': data['cat'],
+                'bid': int(data['amount']),
+                'name': data['url']
+            }).execute()
+            logging.info(f"Supabase'ga ma'lumot qo'shildi: {data['url']}")
+        except Exception as e:
+            logging.error(f"Supabase Xatolik: {e}")
+
         await bot.send_message(user_id, 
             "Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto.\n\nСпасибо за оплату!\nПроверить можно здесь: https://bidmesto.lol")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ <b>Подтверждено</b>", parse_mode=ParseMode.HTML)
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ <b>Подтверждено (Добавлено на сайт)</b>", parse_mode=ParseMode.HTML)
     else:
         await bot.send_message(user_id, 
             "К сожалению, платёж не подтверждён.\n\nВозможные причины:\n• Неверная сумма\n• Нечёткий чек\n• Оплата не поступила\n\nПожалуйста, отправьте чек ещё раз.")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ <b>Отклонено</b>", parse_mode=ParseMode.HTML)
+        await callback.message.edit_caption(caption=caption if (caption := callback.message.caption) else "" + "\n\n❌ <b>Отклонено</b>", parse_mode=ParseMode.HTML)
 
     await callback.answer()
 
