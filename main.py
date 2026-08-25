@@ -6,7 +6,6 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 import asyncio
-import re
 from supabase import create_client
 
 # Supabase Sozlamalari
@@ -39,18 +38,20 @@ async def start_handler(message: Message):
     if len(args) > 1:
         payload = args[1]
         
-        amount_match = re.search(r'bid_(\d+)', payload)
-        cat_match = re.search(r'cat_([^_]+)', payload)
-        url_match = re.search(r'url_(.+)', payload)
+        # 'bid_25_cat_ai_url_https...' matnini xatosiz ajratib olish
+        try:
+            if "bid_" in payload and "_cat_" in payload and "_url_" in payload:
+                # bid va qolgan qismini ajratamiz
+                part_bid, rest1 = payload.split("_cat_", 1)
+                amount = part_bid.replace("bid_", "").strip()
+                
+                # cat va url qismini ajratamiz
+                cat, raw_url = rest1.split("_url_", 1)
+                url = urllib.parse.unquote(raw_url).strip()
+        except Exception as e:
+            logging.error(f"Payload parse error: {e}")
 
-        if amount_match:
-            amount = amount_match.group(1)
-        if cat_match:
-            cat = cat_match.group(1)
-        if url_match:
-            # URL'ni to'g'ri dekodlash (replace('_', ' ') xatosi tuzatildi)
-            url = urllib.parse.unquote(url_match.group(1))
-
+    # Foydalanuvchi ma'lumotlarini saqlaymiz
     user_data[message.from_user.id] = {
         "amount": amount,
         "cat": cat,
@@ -81,7 +82,6 @@ async def start_handler(message: Message):
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-# Aiogram 3 filtri to'g'rilandi (F.photo | F.document)
 @dp.message(F.photo | F.document)
 async def check_handler(message: Message):
     user_id = message.from_user.id
@@ -118,7 +118,7 @@ async def process_callback(callback: CallbackQuery):
     if action == "confirm":
         data = user_data.get(user_id, {"amount": 5, "cat": "other", "url": "https://bidmesto.lol"})
         
-        # SUPABASE BAZASIGA YOZISH (clicks: 0 qo'shildi)
+        # SUPABASE BAZASIGA YOZISH
         try:
             supabase.table('entries').insert({
                 'url': data['url'],
@@ -143,7 +143,6 @@ async def process_callback(callback: CallbackQuery):
         await bot.send_message(user_id, 
             "К сожалению, платёж не подтверждён.\n\nВозможные причины:\n• Неверная сумма\n• Нечёткий чек\n• Оплата не поступила\n\nПожалуйста, отправьте чек ещё раз.")
         
-        # Crash beradigan 'caption' xatoligi tuzatildi
         old_caption = callback.message.caption or ""
         await callback.message.edit_caption(
             caption=old_caption + "\n\n❌ <b>Отклонено</b>", 
