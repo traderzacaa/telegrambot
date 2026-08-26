@@ -12,7 +12,9 @@ from supabase import create_client, Client
 # ================== SOZLAMALAR VA KALITLAR ==================
 BOT_TOKEN = "8834826569:AAFmNoXbXDIrFUmTWvXeqOyv1RhnUhUalYE"
 SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
-SUPABASE_KEY = "sb_secret_5IvU05B2_YifdnV9Vi6u4A_Pk7rCuGa"
+
+# Yangi service_role kalitingiz joylandi:
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0Z3RtZW9kdHVpbWp2cW9xZnpjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzYwMzc0NiwiZXhwIjoyMTAzMTc5NzQ2fQ.Q9_Kk68HruPxDA1TazMWk4dC7L9M6FaFEgmNJZaE3dE"
 
 ADMIN_ID = 6606071265
 
@@ -54,8 +56,6 @@ async def start_handler(message: Message):
     if len(args) > 1:
         payload = args[1]
         
-        # Saytdan kelgan 2 xil formatni ham qo'llab-quvvatlaydi:
-        # 1-format: p_10000_dev_aHR0c... (yangi format)
         if payload.startswith("p_"):
             parts = payload.split('_', 3)
             if len(parts) >= 4:
@@ -63,7 +63,6 @@ async def start_handler(message: Message):
                 amount = amount_str
                 url = decode_url(encoded_url)
         
-        # 2-format: amount_10000_url_... (eski format)
         else:
             amount_match = re.search(r'amount_(\d+)', payload)
             url_match = re.search(r'url_(.+)', payload)
@@ -133,7 +132,6 @@ async def check_handler(message: Message):
         ]
     ])
 
-    # Admin interfeysiga jo'natish
     try:
         if message.photo:
             await bot.send_photo(chat_id=ADMIN_ID, photo=message.photo[-1].file_id, caption=caption, reply_markup=keyboard, parse_mode=ParseMode.HTML)
@@ -143,7 +141,7 @@ async def check_handler(message: Message):
         logging.error(f"Adminga jo'natishda xatolik: {e}")
 
 
-# Admin "Подтвердить" tugmasini bosganda (MUSTAHKAMLANGAN VA XATOLIKLARSIZ)
+# Admin "Подтвердить" tugmasini bosganda
 @dp.callback_query(F.data.startswith("confirm_"))
 async def admin_confirm(callback: CallbackQuery):
     user_id = int(callback.data.split("_")[1])
@@ -154,31 +152,27 @@ async def admin_confirm(callback: CallbackQuery):
         return
 
     try:
-        # Summani xavfsiz songa o'tkazish
         try:
             bid_val = int(data["amount"])
         except ValueError:
             bid_val = 0
 
-        # Supabase-ga e'lonni joylash
         db_data = {
+            "name": str(data["url"]),
             "url": str(data["url"]),
             "cat": str(data["category"]),
             "bid": bid_val,
             "clicks": 0
         }
         
-        # Bazaga kiritish buyrug'i
         supabase.table("entries").insert(db_data).execute()
 
-        # Adminga xabar va tugmalarni o'chirish
         await callback.message.edit_caption(
             caption=callback.message.caption + "\n\n✅ <b>Платёж подтверждён и опубликован на сайте!</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=None
         )
 
-        # Foydalanuvchiga xabar
         await bot.send_message(
             chat_id=user_id,
             text=f"✅ <b>Ваш платёж подтверждён!</b>\n\nОбъявление <b>{data['url']}</b> успешно опубликовано на сайте BIDmesto.lol!",
@@ -189,7 +183,6 @@ async def admin_confirm(callback: CallbackQuery):
     except Exception as e:
         error_msg = str(e)
         logging.error(f"Bazaga yozishda xatolik: {error_msg}")
-        # Xatolik yuz berganda ekranga aniq sababini chiqarish
         await callback.answer(f"❌ Ошибка записи: {error_msg[:60]}", show_alert=True)
 
 
