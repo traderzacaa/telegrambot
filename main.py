@@ -143,7 +143,7 @@ async def check_handler(message: Message):
         logging.error(f"Adminga jo'natishda xatolik: {e}")
 
 
-# Admin "Подтвердить" tugmasini bosganda
+# Admin "Подтвердить" tugmasini bosganda (MUSTAHKAMLANGAN VA XATOLIKLARSIZ)
 @dp.callback_query(F.data.startswith("confirm_"))
 async def admin_confirm(callback: CallbackQuery):
     user_id = int(callback.data.split("_")[1])
@@ -154,20 +154,30 @@ async def admin_confirm(callback: CallbackQuery):
         return
 
     try:
+        # Summani xavfsiz songa o'tkazish
+        try:
+            bid_val = int(data["amount"])
+        except ValueError:
+            bid_val = 0
+
         # Supabase-ga e'lonni joylash
         db_data = {
-            "url": data["url"],
-            "cat": data["category"],
-            "bid": int(data["amount"]),
+            "url": str(data["url"]),
+            "cat": str(data["category"]),
+            "bid": bid_val,
             "clicks": 0
         }
+        
+        # Bazaga kiritish buyrug'i
         supabase.table("entries").insert(db_data).execute()
 
-        # Adminga xabar
+        # Adminga xabar va tugmalarni o'chirish
         await callback.message.edit_caption(
             caption=callback.message.caption + "\n\n✅ <b>Платёж подтверждён и опубликован на сайте!</b>",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=None
         )
+
         # Foydalanuvchiga xabar
         await bot.send_message(
             chat_id=user_id,
@@ -177,8 +187,10 @@ async def admin_confirm(callback: CallbackQuery):
         await callback.answer("Успешно добавлено в базу!")
 
     except Exception as e:
-        logging.error(f"Bazaga yozishda xatolik: {e}")
-        await callback.answer("Ошибка при записи в базу!", show_alert=True)
+        error_msg = str(e)
+        logging.error(f"Bazaga yozishda xatolik: {error_msg}")
+        # Xatolik yuz berganda ekranga aniq sababini chiqarish
+        await callback.answer(f"❌ Ошибка записи: {error_msg[:60]}", show_alert=True)
 
 
 # Admin "Отклонить" tugmasini bosganda
@@ -188,7 +200,8 @@ async def admin_reject(callback: CallbackQuery):
 
     await callback.message.edit_caption(
         caption=callback.message.caption + "\n\n❌ <b>Платёж отклонен.</b>",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        reply_markup=None
     )
 
     await bot.send_message(
