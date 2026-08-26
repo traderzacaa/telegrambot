@@ -1,232 +1,118 @@
-import os
-import base64
+import asyncio
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import base64
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import CommandStart, CommandObject
 from supabase import create_client, Client
 
-# Настройки логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
-# 1. НАСТРОЙКИ И КЛЮЧИ
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # Вставьте сюда токен вашего бота от @BotFather
-ADMIN_ID = 123456789                  # Вставьте ваш личный Telegram ID (узнать в @userinfobot)
-
+# --- NASTROYKI I KLYUCHI ---
+BOT_TOKEN = "8834826569:AAFmNoXbXDIrFUmTWvXeqOyv1RhnUhUalYE"
 SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0Z3RtZW9kdHVpbWp2cW9xZnpjIiwicm9sZSI6ImF2b24iLCJpYXQiOjE3ODc2MDM3NDYsImV4cCI6MjEwMzE3OTc0Nn0.XiW-O2-TQ5m_7yyj7ZNAWJwPHZYMXekpZ9AaaZyfnRg"
+SUPABASE_KEY = "sb_secret_5IvU05B2_YifdnV9Vi6u4A_Pk7rCuGa"  # Secret Key dlya zapisi v bazu
 
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Категории
-CATS = {
-    'all': 'Все категории',
-    'ai': '🤖 ИИ и боты',
-    'market': '📣 Маркетинг и PR',
-    'biz': '💼 Бизнес',
-    'dev': '💻 Разработка',
-    'social': '📱 Соцсети и каналы',
-    'other': '✨ Разное'
-}
-
-# Функция безопасного декодирования URL
-def safe_b64decode(str_to_decode: str) -> str:
+# Funktsiya dekodirovaniya URL iz base64
+def decode_url(safe_url: str) -> str:
     try:
-        rem = len(str_to_decode) % 4
-        if rem > 0:
-            str_to_decode += '=' * (4 - rem)
-        
-        str_to_decode = str_to_decode.replace('-', '+').replace('_', '/')
-        decoded_bytes = base64.b64decode(str_to_decode)
+        safe_url = safe_url.replace('-', '+').replace('_', '/')
+        padding = len(safe_url) % 4
+        if padding:
+            safe_url += '=' * (4 - padding)
+        decoded_bytes = base64.b64decode(safe_url)
         return decoded_bytes.decode('utf-8')
     except Exception as e:
-        logging.error(f"Ошибка декодирования: {e}")
-        return ""
+        logging.error(f"Oshibka dekodirovaniya URL: {e}")
+        return None
 
-# Форматирование суммы (например: 15 000)
-def format_money(amount: int) -> str:
-    return f"{amount:,}".replace(",", " ")
+# Komanda /start (Obrabotka deepLink s sayta)
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message, command: CommandObject):
+    args = command.args
 
-# ОБРАБОТЧИК КОМАНДЫ /start И DEEP-LINK ИЗ САЙТА
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    args = context.args
-
-    if args and len(args) > 0:
-        param = args[0]
-        
-        # Разбор параметров сайта: p_СУММА_КАТЕГОРИЯ_URL
-        if param.startswith("p_"):
-            try:
-                parts = param.split("_", 3)
-                if len(parts) == 4:
-                    _, amount_str, cat_key, safe_url = parts
-                    
-                    amount = int(amount_str)
-                    url = safe_b64decode(safe_url)
-                    cat_name = CATS.get(cat_key, '✨ Разное')
-
-                    if not url:
-                        await update.message.reply_text("❌ Ошибка при чтении ссылки. Попробуйте еще раз с сайта.")
-                        return
-
-                    # Сохраняем детали заказа в сессию пользователя
-                    context.user_data['order'] = {
-                        'bid': amount,
-                        'cat': cat_key,
-                        'url': url
-                    }
-
-                    text = (
-                        f"👋 **Здравствуйте, {user.first_name}!**\n\n"
-                        f"📌 **Детали вашего заказа:**\n"
-                        f"🌐 **Ссылка:** `{url}`\n"
-                        f"📂 **Категория:** {cat_name}\n"
-                        f"💰 **Сумма оплаты:** `{format_money(amount)} so'm`\n\n"
-                        f"💳 **Карта для оплаты:**\n"
-                        f"`8600 0000 0000 0000` (Имя владельца)\n\n"
-                        f"⚠️ *После оплаты отправьте скриншот или фото чека прямо в этот чат.*"
-                    )
-
-                    await update.message.reply_text(text, parse_mode="Markdown")
-                    return
-            except Exception as e:
-                logging.error(f"Ошибка параметров /start: {e}")
-
-    await update.message.reply_text(
-        "👋 **Добро пожаловать!**\n\n"
-        "Чтобы занять место в рейтинге, перейдите на наш сайт [BIDmesto.lol](https://bidmesto.lol) и оформите заявку.",
-        parse_mode="Markdown"
-    )
-
-# ОБРАБОТКА ЧЕКА ОБ ОПЛАТЕ ОТ ПОЛЬЗОВАТЕЛЯ (ФОТО ИЛИ ДОКУМЕНТ)
-async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    order = context.user_data.get('order')
-
-    if not order:
-        await update.message.reply_text(
-            "⚠️ **Заказ не найден.**\nПожалуйста, сначала перейдите на сайт [BIDmesto.lol](https://bidmesto.lol) и выберите ставку.",
-            parse_mode="Markdown"
+    if not args or not args.startswith("p_"):
+        await message.answer(
+            "👋 **Добро пожаловать в бота BIDmesto!**\n\n"
+            "Чтобы занять место в рейтинге и сделать ставку, перейдите на сайт **BIDmesto.lol**."
         )
         return
 
-    # Подтверждаем пользователю получение
-    await update.message.reply_text("✅ **Чек получен!** После проверки администратором ваша ссылка появиться в рейтинге.")
-
-    # Сохраняем данные для администратора
-    order_id = f"{user.id}_{order['bid']}"
-    context.bot_data[order_id] = {
-        'user_id': user.id,
-        'user_name': user.full_name,
-        'username': user.username,
-        'bid': order['bid'],
-        'cat': order['cat'],
-        'url': order['url']
-    }
-
-    # Кнопки для администратора
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve_{order_id}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{order_id}")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    admin_text = (
-        f"📥 **Новый чек об оплате!**\n\n"
-        f"👤 **Пользователь:** {user.full_name} (@{user.username})\n"
-        f"🌐 **URL:** `{order['url']}`\n"
-        f"📂 **Категория:** {CATS.get(order['cat'], order['cat'])}\n"
-        f"💰 **Сумма:** `{format_money(order['bid'])} so'm`"
-    )
-
-    # Пересылаем чек администратору
-    if update.message.photo:
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=update.message.photo[-1].file_id,
-            caption=admin_text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-    elif update.message.document:
-        await context.bot.send_document(
-            chat_id=ADMIN_ID,
-            document=update.message.document.file_id,
-            caption=admin_text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-
-# ДЕЙСТВИЯ АДМИНИСТРАТОРА (ПОДТВЕРЖДЕНИЕ / ОТКЛОНЕНИЕ)
-async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if data.startswith("approve_"):
-        order_id = data.replace("approve_", "")
-        order_info = context.bot_data.get(order_id)
-
-        if not order_info:
-            await query.edit_message_caption(caption="❌ Данные заказа не найдены или уже обработаны.")
+    try:
+        # Razbor formata p_{amount}_{cat}_{safeUrl}
+        parts = args.split('_', 3)
+        if len(parts) < 4:
+            await message.answer("❌ Неверный формат ссылки.")
             return
 
-        # 1. Добавляем запись в базу данных Supabase
-        try:
-            res = supabase.from_('entries').insert({
-                'url': order_info['url'],
-                'cat': order_info['cat'],
-                'bid': order_info['bid'],
-                'clicks': 0
-            }).execute()
+        _, amount_str, cat, encoded_url = parts
+        amount = int(amount_str)
+        real_url = decode_url(encoded_url)
 
-            # 2. Обновляем сообщение администратора
-            await query.edit_message_caption(
-                caption=f"✅ **ПОДТВЕРЖДЕНО И ДОБАВЛЕНО НА САЙТ!**\n\n"
-                        f"🌐 `{order_info['url']}`\n"
-                        f"💰 `{format_money(order_info['bid'])} so'm`",
-                parse_mode="Markdown"
-            )
+        if not real_url:
+            await message.answer("❌ Ошибка при чтении ссылки.")
+            return
 
-            # 3. Уведомляем пользователя
-            await context.bot.send_message(
-                chat_id=order_info['user_id'],
-                text=f"🎉 **Ваша оплата подтверждена!**\n\nСсылка [{order_info['url']}]({order_info['url']}) успешно добавлена в рейтинг на [BIDmesto.lol](https://bidmesto.lol)!",
-                parse_mode="Markdown"
-            )
+        caption = (
+            f"🛒 **Новый заказ на размещение!**\n\n"
+            f"🔗 **Ссылка:** {real_url}\n"
+            f"📂 **Категория:** {cat}\n"
+            f"💰 **Сумма ставки:** {amount:,} so'm\n\n"
+            f"Подтвердите оплату, чтобы опубликовать объявление на сайте:"
+        )
 
-            # Удаляем обработанный заказ
-            del context.bot_data[order_id]
+        keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    types.InlineKeyboardButton(
+                        text=f"💳 Оплатить {amount:,} so'm", 
+                        callback_data=f"pay_{amount}_{cat}_{encoded_url}"
+                    )
+                ]
+            ]
+        )
 
-        except Exception as e:
-            logging.error(f"Ошибка при записи в Supabase: {e}")
-            await query.message.reply_text(f"❌ Ошибка добавления в базу: {e}")
+        await message.answer(caption, reply_markup=keyboard, parse_mode="Markdown")
 
-    elif data.startswith("reject_"):
-        order_id = data.replace("reject_", "")
-        order_info = context.bot_data.get(order_id)
+    except Exception as e:
+        logging.error(f"Oshibka v start handler: {e}")
+        await message.answer("❌ Произошла ошибка при обработке заказа.")
 
-        if order_info:
-            await query.edit_message_caption(caption="❌ **Заказ отклонен.**", parse_mode="Markdown")
-            await context.bot.send_message(
-                chat_id=order_info['user_id'],
-                text="❌ **Ваша оплата не подтверждена.** Попробуйте снова или обратитесь в службу поддержки."
-            )
-            del context.bot_data[order_id]
+# Obrabotka najatiya knopki oplaty i zapis v Supabase
+@dp.callback_query(F.data.startswith("pay_"))
+async def process_payment(callback: types.CallbackQuery):
+    try:
+        parts = callback.data.split('_', 3)
+        _, amount_str, cat, encoded_url = parts
+        amount = int(amount_str)
+        real_url = decode_url(encoded_url)
 
-# ГЛАВНАЯ ФУНКЦИЯ ЗАПУСКА
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+        # Zapis v tablitsu 'entries' v Supabase
+        data = {
+            "url": real_url,
+            "cat": cat,
+            "bid": amount,
+            "clicks": 0
+        }
+        
+        response = supabase.table("entries").insert(data).execute()
 
-    # Регистрация хэндлеров
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_receipt))
-    app.add_handler(CallbackQueryHandler(handle_admin_action))
+        await callback.message.edit_text(
+            f"✅ **Оплата успешно подтверждена!**\n\n"
+            f"🌐 **Ссылка:** {real_url}\n"
+            f"💰 **Ставка:** {amount:,} so'm\n\n"
+            f"Ваше объявление уже опубликовано и отображается на **BIDmesto.lol** в режиме реального времени!"
+        )
 
+    except Exception as e:
+        logging.error(f"Oshibka zapisi v Supabase: {e}")
+        await callback.answer("❌ Ошибка при записи в базу данных!", show_alert=True)
+
+async def main():
+    logging.basicConfig(level=logging.INFO)
     print("🤖 Бот успешно запущен...")
-    app.run_polling()
+    await dp.start_polling(bot)
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    asyncio.run(main())
