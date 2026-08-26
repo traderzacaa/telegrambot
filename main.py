@@ -1,170 +1,232 @@
 import os
-import logging
 import base64
-import urllib.parse
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.enums import ParseMode
-import asyncio
-from supabase import create_client
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from supabase import create_client, Client
 
-# SUPABASE SOZLAMALARI
+# Настройки логирования
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+# 1. НАСТРОЙКИ И КЛЮЧИ
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # Вставьте сюда токен вашего бота от @BotFather
+ADMIN_ID = 123456789                  # Вставьте ваш личный Telegram ID (узнать в @userinfobot)
+
 SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0Z3RtZW9kdHVpbWp2cW9xZnpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MDM3NDYsImV4cCI6MjEwMzE3OTc0Nn0.XiW-O2-TQ5m_7yyj7ZNAWJwPHZYMXekpZ9AaaZyfnRg"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0Z3RtZW9kdHVpbWp2cW9xZnpjIiwicm9sZSI6ImF2b24iLCJpYXQiOjE3ODc2MDM3NDYsImV4cCI6MjEwMzE3OTc0Nn0.XiW-O2-TQ5m_7yyj7ZNAWJwPHZYMXekpZ9AaaZyfnRg"
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 6606071265
+# Категории
+CATS = {
+    'all': 'Все категории',
+    'ai': '🤖 ИИ и боты',
+    'market': '📣 Маркетинг и PR',
+    'biz': '💼 Бизнес',
+    'dev': '💻 Разработка',
+    'social': '📱 Соцсети и каналы',
+    'other': '✨ Разное'
+}
 
-# KARTALAR
-UZCARD = "5614 6821 1178 0714"
-VISA = "4023 0601 4330 7436"
-MASTERCARD = "5476 3815 0507 5414"
-CARD_NAME = "ASLBEK ZIYODULLAYEV"
-
-logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-
-user_data = {}
-
-def format_money(amount):
+# Функция безопасного декодирования URL
+def safe_b64decode(str_to_decode: str) -> str:
     try:
-        return f"{int(amount):,}".replace(",", " ")
-    except:
-        return amount
+        rem = len(str_to_decode) % 4
+        if rem > 0:
+            str_to_decode += '=' * (4 - rem)
+        
+        str_to_decode = str_to_decode.replace('-', '+').replace('_', '/')
+        decoded_bytes = base64.b64decode(str_to_decode)
+        return decoded_bytes.decode('utf-8')
+    except Exception as e:
+        logging.error(f"Ошибка декодирования: {e}")
+        return ""
 
-@dp.message(CommandStart())
-async def start_handler(message: Message):
-    args = message.text.split(maxsplit=1)
-    amount = "10000"
-    cat = "other"
-    url = "—"
+# Форматирование суммы (например: 15 000)
+def format_money(amount: int) -> str:
+    return f"{amount:,}".replace(",", " ")
 
-    if len(args) > 1:
-        payload = args[1]
-        try:
-            parts = payload.split("_")
-            if len(parts) >= 6 and parts[0] == "b" and parts[2] == "c" and parts[4] == "u":
-                amount = parts[1]
-                cat = parts[3]
-                encoded_url = parts[5]
-                missing_padding = len(encoded_url) % 4
-                if missing_padding:
-                    encoded_url += '=' * (4 - missing_padding)
-                decoded_bytes = base64.b64decode(encoded_url)
-                url = urllib.parse.unquote(decoded_bytes.decode('utf-8'))
-        except Exception as e:
-            logging.error(f"Payload xato: {e}")
+# ОБРАБОТЧИК КОМАНДЫ /start И DEEP-LINK ИЗ САЙТА
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    args = context.args
 
-    user_data[message.from_user.id] = {
-        "amount": amount,
-        "cat": cat,
-        "url": url
+    if args and len(args) > 0:
+        param = args[0]
+        
+        # Разбор параметров сайта: p_СУММА_КАТЕГОРИЯ_URL
+        if param.startswith("p_"):
+            try:
+                parts = param.split("_", 3)
+                if len(parts) == 4:
+                    _, amount_str, cat_key, safe_url = parts
+                    
+                    amount = int(amount_str)
+                    url = safe_b64decode(safe_url)
+                    cat_name = CATS.get(cat_key, '✨ Разное')
+
+                    if not url:
+                        await update.message.reply_text("❌ Ошибка при чтении ссылки. Попробуйте еще раз с сайта.")
+                        return
+
+                    # Сохраняем детали заказа в сессию пользователя
+                    context.user_data['order'] = {
+                        'bid': amount,
+                        'cat': cat_key,
+                        'url': url
+                    }
+
+                    text = (
+                        f"👋 **Здравствуйте, {user.first_name}!**\n\n"
+                        f"📌 **Детали вашего заказа:**\n"
+                        f"🌐 **Ссылка:** `{url}`\n"
+                        f"📂 **Категория:** {cat_name}\n"
+                        f"💰 **Сумма оплаты:** `{format_money(amount)} so'm`\n\n"
+                        f"💳 **Карта для оплаты:**\n"
+                        f"`8600 0000 0000 0000` (Имя владельца)\n\n"
+                        f"⚠️ *После оплаты отправьте скриншот или фото чека прямо в этот чат.*"
+                    )
+
+                    await update.message.reply_text(text, parse_mode="Markdown")
+                    return
+            except Exception as e:
+                logging.error(f"Ошибка параметров /start: {e}")
+
+    await update.message.reply_text(
+        "👋 **Добро пожаловать!**\n\n"
+        "Чтобы занять место в рейтинге, перейдите на наш сайт [BIDmesto.lol](https://bidmesto.lol) и оформите заявку.",
+        parse_mode="Markdown"
+    )
+
+# ОБРАБОТКА ЧЕКА ОБ ОПЛАТЕ ОТ ПОЛЬЗОВАТЕЛЯ (ФОТО ИЛИ ДОКУМЕНТ)
+async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    order = context.user_data.get('order')
+
+    if not order:
+        await update.message.reply_text(
+            "⚠️ **Заказ не найден.**\nПожалуйста, сначала перейдите на сайт [BIDmesto.lol](https://bidmesto.lol) и выберите ставку.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Подтверждаем пользователю получение
+    await update.message.reply_text("✅ **Чек получен!** После проверки администратором ваша ссылка появиться в рейтинге.")
+
+    # Сохраняем данные для администратора
+    order_id = f"{user.id}_{order['bid']}"
+    context.bot_data[order_id] = {
+        'user_id': user.id,
+        'user_name': user.full_name,
+        'username': user.username,
+        'bid': order['bid'],
+        'cat': order['cat'],
+        'url': order['url']
     }
 
-    formatted_sum = format_money(amount)
-
-    text = f"""Здравствуйте!
-
-Вы хотите занять место в рейтинге <b>BIDmesto</b>.
-
-Сумма к оплате: <b>{formatted_sum} so'm</b>
-Сайт: <b>{url}</b>
-
-Переведите <b>точную сумму</b> на удобную карту:
-
-<b>Uzcard:</b>
-<code>{UZCARD}</code>
-
-<b>Visa:</b>
-<code>{VISA}</code>
-
-<b>Mastercard:</b>
-<code>{MASTERCARD}</code>
-
-Получатель: <b>{CARD_NAME}</b>
-
-После оплаты отправьте сюда <b>чек</b> (скриншот или фото квитанции)."""
-
-    await message.answer(text, parse_mode=ParseMode.HTML)
-
-
-@dp.message(F.photo | F.document)
-async def check_handler(message: Message):
-    user_id = message.from_user.id
-    data = user_data.get(user_id, {"amount": "10000", "cat": "other", "url": "—"})
-    formatted_sum = format_money(data['amount'])
-
-    await message.answer("Чек получен ✅\n\nВаш платёж проверяется. Пожалуйста, подождите.")
-
-    caption = f"""🔔 <b>Новый платёж</b>
-
-Сумма: <b>{formatted_sum} so'm</b>
-Категория: <b>{data['cat']}</b>
-Сайт: <b>{data['url']}</b>
-Пользователь: @{message.from_user.username or 'нет'} (ID: {user_id})
-"""
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    # Кнопки для администратора
+    keyboard = [
         [
-            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_{user_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user_id}")
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve_{order_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{order_id}")
         ]
-    ])
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if message.photo:
-        await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    else:
-        await bot.send_document(ADMIN_ID, message.document.file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    admin_text = (
+        f"📥 **Новый чек об оплате!**\n\n"
+        f"👤 **Пользователь:** {user.full_name} (@{user.username})\n"
+        f"🌐 **URL:** `{order['url']}`\n"
+        f"📂 **Категория:** {CATS.get(order['cat'], order['cat'])}\n"
+        f"💰 **Сумма:** `{format_money(order['bid'])} so'm`"
+    )
 
+    # Пересылаем чек администратору
+    if update.message.photo:
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=update.message.photo[-1].file_id,
+            caption=admin_text,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+    elif update.message.document:
+        await context.bot.send_document(
+            chat_id=ADMIN_ID,
+            document=update.message.document.file_id,
+            caption=admin_text,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
 
-@dp.callback_query(F.data.startswith("confirm_") | F.data.startswith("reject_"))
-async def process_callback(callback: CallbackQuery):
-    action, user_id = callback.data.split("_")
-    user_id = int(user_id)
+# ДЕЙСТВИЯ АДМИНИСТРАТОРА (ПОДТВЕРЖДЕНИЕ / ОТКЛОНЕНИЕ)
+async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if action == "confirm":
-        data = user_data.get(user_id, {"amount": "10000", "cat": "other", "url": "https://bidmesto.lol"})
-        formatted_sum = format_money(data['amount'])
-        
+    data = query.data
+    if data.startswith("approve_"):
+        order_id = data.replace("approve_", "")
+        order_info = context.bot_data.get(order_id)
+
+        if not order_info:
+            await query.edit_message_caption(caption="❌ Данные заказа не найдены или уже обработаны.")
+            return
+
+        # 1. Добавляем запись в базу данных Supabase
         try:
-            bid_val = int(data['amount'])
-            url_val = str(data['url'])
-            cat_val = str(data['cat'])
-
-            data_to_insert = {
-                'url': url_val,
-                'cat': cat_val,
-                'bid': bid_val,
-                'name': url_val,
+            res = supabase.from_('entries').insert({
+                'url': order_info['url'],
+                'cat': order_info['cat'],
+                'bid': order_info['bid'],
                 'clicks': 0
-            }
-            
-            res = supabase.table('entries').insert(data_to_insert).execute()
-            logging.info(f"Muvaffaqiyatli saqlandi: {res}")
-            
-            await bot.send_message(user_id, f"Оплата успешно подтверждена! ✅\n\nВаше место добавлено в рейтинг BIDmesto: https://bidmesto.lol")
-            
-            old_caption = callback.message.caption or ""
-            await callback.message.edit_caption(
-                caption=old_caption + f"\n\n✅ <b>Подтверждено ({formatted_sum} so'm)</b>", 
-                parse_mode=ParseMode.HTML
+            }).execute()
+
+            # 2. Обновляем сообщение администратора
+            await query.edit_message_caption(
+                caption=f"✅ **ПОДТВЕРЖДЕНО И ДОБАВЛЕНО НА САЙТ!**\n\n"
+                        f"🌐 `{order_info['url']}`\n"
+                        f"💰 `{format_money(order_info['bid'])} so'm`",
+                parse_mode="Markdown"
             )
+
+            # 3. Уведомляем пользователя
+            await context.bot.send_message(
+                chat_id=order_info['user_id'],
+                text=f"🎉 **Ваша оплата подтверждена!**\n\nСсылка [{order_info['url']}]({order_info['url']}) успешно добавлена в рейтинг на [BIDmesto.lol](https://bidmesto.lol)!",
+                parse_mode="Markdown"
+            )
+
+            # Удаляем обработанный заказ
+            del context.bot_data[order_id]
+
         except Exception as e:
-            logging.error(f"Xato: {e}")
-            await callback.message.answer(f"⚠️ **Bazaga yozishda xatolik:**\n`{e}`", parse_mode=ParseMode.MARKDOWN)
-    else:
-        await bot.send_message(user_id, "К сожалению, платёж не подтверждён.")
-        old_caption = callback.message.caption or ""
-        await callback.message.edit_caption(caption=old_caption + "\n\n❌ <b>Отклонено</b>", parse_mode=ParseMode.HTML)
+            logging.error(f"Ошибка при записи в Supabase: {e}")
+            await query.message.reply_text(f"❌ Ошибка добавления в базу: {e}")
 
-    await callback.answer()
+    elif data.startswith("reject_"):
+        order_id = data.replace("reject_", "")
+        order_info = context.bot_data.get(order_id)
 
-async def main():
-    await dp.start_polling(bot)
+        if order_info:
+            await query.edit_message_caption(caption="❌ **Заказ отклонен.**", parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=order_info['user_id'],
+                text="❌ **Ваша оплата не подтверждена.** Попробуйте снова или обратитесь в службу поддержки."
+            )
+            del context.bot_data[order_id]
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# ГЛАВНАЯ ФУНКЦИЯ ЗАПУСКА
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Регистрация хэндлеров
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_receipt))
+    app.add_handler(CallbackQueryHandler(handle_admin_action))
+
+    print("🤖 Бот успешно запущен...")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
