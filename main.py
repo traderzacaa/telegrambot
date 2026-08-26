@@ -1,31 +1,36 @@
-import asyncio
+import os
 import logging
+import re
+import asyncio
 import base64
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart, CommandObject
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ContentType
+from aiogram.enums import ParseMode
 from supabase import create_client, Client
 
-# --- SOZLAMALAR ---
+# ================== SOZLAMALAR VA KALITLAR ==================
 BOT_TOKEN = "8834826569:AAFmNoXbXDIrFUmTWvXeqOyv1RhnUhUalYE"
 SUPABASE_URL = "https://wtgtmeodtuimjvqoqfzc.supabase.co"
 SUPABASE_KEY = "sb_secret_5IvU05B2_YifdnV9Vi6u4A_Pk7rCuGa"
 
-# --- KARTA MA'LUMOTLARINGIZNI SHU YERGA YOZING ---
-CARD_NUMBER = "8600 0000 0000 0000"  # O'zingizning karta raqamingiz
-CARD_HOLDER = "ISM SHARIFINGIZ"      # Kartadagi ism-sharif
+ADMIN_ID = 6606071265
 
+# Sizning karta raqamlaringiz:
+VISA = "4023 0601 4330 7436"
+MASTERCARD = "5476 3815 0507 5414"
+CARD_NAME = "ASLBEK ZIYODULLAYEV"
+# ============================================================
+
+logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-main_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🌐 Перейти на сайт"), KeyboardButton(text="ℹ️ О проекте")]
-    ],
-    resize_keyboard=True
-)
+# Foydalanuvchilarning vaqtinchalik buyurtma ma'lumotlarini saqlash
+user_data = {}
 
+# URL funksiyasi (Saytdan kelgan URLni dekodlash)
 def decode_url(safe_url: str) -> str:
     try:
         safe_url = safe_url.replace('-', '+').replace('_', '/')
@@ -35,138 +40,166 @@ def decode_url(safe_url: str) -> str:
         decoded_bytes = base64.b64decode(safe_url)
         return decoded_bytes.decode('utf-8')
     except Exception as e:
-        logging.error(f"Decode error: {e}")
-        return None
+        logging.error(f"URL Decode error: {e}")
+        return safe_url
 
 @dp.message(CommandStart())
-async def cmd_start(message: types.Message, command: CommandObject):
-    args = command.args
+async def start_handler(message: Message):
+    args = message.text.split(maxsplit=1)
+    
+    amount = "0"
+    category = "general"
+    url = "—"
 
-    if not args or not args.startswith("p_"):
-        await message.answer(
-            "👋 **Добро пожаловать в бота BIDmesto!**\n\n"
-            "Чтобы занять место в рейтинге и сделать ставку, перейдите на сайт **BIDmesto.lol**.",
-            reply_markup=main_keyboard,
-            parse_mode="Markdown"
-        )
+    if len(args) > 1:
+        payload = args[1]
+        
+        # Saytdan kelgan 2 xil formatni ham qo'llab-quvvatlaydi:
+        # 1-format: p_10000_dev_aHR0c... (yangi format)
+        if payload.startswith("p_"):
+            parts = payload.split('_', 3)
+            if len(parts) >= 4:
+                _, amount_str, category, encoded_url = parts
+                amount = amount_str
+                url = decode_url(encoded_url)
+        
+        # 2-format: amount_10000_url_... (eski format)
+        else:
+            amount_match = re.search(r'amount_(\d+)', payload)
+            url_match = re.search(r'url_(.+)', payload)
+            if amount_match:
+                amount = amount_match.group(1)
+            if url_match:
+                url = url_match.group(1).replace('%20', ' ').replace('_', ' ')
+
+    try:
+        formatted_amount = f"{int(amount):,}"
+    except ValueError:
+        formatted_amount = amount
+
+    user_data[message.from_user.id] = {
+        "amount": amount,
+        "formatted_amount": formatted_amount,
+        "category": category,
+        "url": url
+    }
+
+    text = f"""Здравствуйте!
+
+Вы хотите занять место в рейтинге <b>BIDmesto</b>.
+
+Сайт: <b>{url}</b>
+Сумма к оплате: <b>{formatted_amount} so'm</b>
+
+Переведите <b>точную сумму</b> на одну из карт:
+
+<b>Visa:</b>
+<code>{VISA}</code>
+
+<b>Mastercard:</b>
+<code>{MASTERCARD}</code>
+
+Получатель: <b>{CARD_NAME}</b>
+
+После оплаты отправьте сюда <b>чек</b> (скриншот или фото квитанции).
+
+Мы проверим платёж в течение 5–15 минут."""
+
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+
+# Chek yuborilganda (Rasm yoki Fayl)
+@dp.message(F.content_type.in_({ContentType.PHOTO, ContentType.DOCUMENT}))
+async def check_handler(message: Message):
+    user_id = message.from_user.id
+    data = user_data.get(user_id, {"amount": "0", "formatted_amount": "0", "category": "general", "url": "—"})
+
+    await message.answer(
+        "Чек получен ✅\n\nВаш платёж проверяется.\nОбычно это занимает 5–15 минут.\n\nПожалуйста, подождите."
+    )
+
+    caption = f"""🔔 <b>Новый платёж!</b>
+
+Сумма: <b>{data['formatted_amount']} so'm</b>
+Категория: <b>{data['category']}</b>
+Сайт: <b>{data['url']}</b>
+Пользователь: @{message.from_user.username or 'нет'} (ID: <code>{user_id}</code>)
+"""
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_{user_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user_id}")
+        ]
+    ])
+
+    # Admin interfeysiga jo'natish
+    try:
+        if message.photo:
+            await bot.send_photo(chat_id=ADMIN_ID, photo=message.photo[-1].file_id, caption=caption, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+        elif message.document:
+            await bot.send_document(chat_id=ADMIN_ID, document=message.document.file_id, caption=caption, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.error(f"Adminga jo'natishda xatolik: {e}")
+
+
+# Admin "Подтвердить" tugmasini bosganda
+@dp.callback_query(F.data.startswith("confirm_"))
+async def admin_confirm(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+    data = user_data.get(user_id)
+
+    if not data:
+        await callback.answer("⚠️ Данные заказа не найдены!", show_alert=True)
         return
 
     try:
-        parts = args.split('_', 3)
-        if len(parts) < 4:
-            await message.answer("❌ Неверный формат ссылки.", reply_markup=main_keyboard)
-            return
-
-        _, amount_str, cat, encoded_url = parts
-        amount = int(amount_str)
-        real_url = decode_url(encoded_url)
-
-        if not real_url:
-            await message.answer("❌ Ошибка при чтении ссылки.", reply_markup=main_keyboard)
-            return
-
-        caption = (
-            f"🛒 **Новый заказ на размещение!**\n\n"
-            f"🔗 **Ссылка:** {real_url}\n"
-            f"📂 **Категория:** {cat}\n"
-            f"💰 **Сумма ставки:** {amount:,} so'm\n\n"
-            f"Нажмите кнопку ниже, чтобы получить реквизиты для оплаты:"
-        )
-
-        keyboard = types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text=f"💳 Оплатить {amount:,} so'm", 
-                        callback_data=f"pay_{amount}_{cat}_{encoded_url}"
-                    )
-                ]
-            ]
-        )
-
-        await message.answer(caption, reply_markup=keyboard, parse_mode="Markdown")
-
-    except Exception as e:
-        logging.error(f"Start handler error: {e}")
-        await message.answer("❌ Произошла ошибка при обработке заказа.", reply_markup=main_keyboard)
-
-@dp.message(F.text == "🌐 Перейти на сайт")
-async def open_site(message: types.Message):
-    await message.answer("Наш сайт: https://bidmesto.lol")
-
-@dp.message(F.text == "ℹ️ О проекте")
-async def about_project(message: types.Message):
-    await message.answer("BIDmesto.lol — открытый рейтинг со ставками за места.")
-
-# "💳 Оплатить" tugmasi bosilganda karta va yo'riqnomani chiqarish
-@dp.callback_query(F.data.startswith("pay_"))
-async def process_payment(callback: types.CallbackQuery):
-    try:
-        parts = callback.data.split('_', 3)
-        _, amount_str, cat, encoded_url = parts
-        amount = int(amount_str)
-        real_url = decode_url(encoded_url)
-
-        # Karta rekvizitlarini ko'rsatish
-        pay_info = (
-            f"💳 **Реквизиты для оплаты:**\n\n"
-            f"📍 **Карта:** `{CARD_NUMBER}`\n"
-            f"👤 **Получатель:** {CARD_HOLDER}\n"
-            f"💵 **К оплате:** **{amount:,} so'm**\n\n"
-            f"⚠️ **Инструкция:**\n"
-            f"1. Переведите точную сумму на указанную карту.\n"
-            f"2. После оплаты нажмите кнопку **«Я оплатил (Подтвердить)»** ниже."
-        )
-
-        keyboard = types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text="✅ Я оплатил (Подтвердить)", 
-                        callback_data=f"confirm_{amount}_{cat}_{encoded_url}"
-                    )
-                ]
-            ]
-        )
-
-        await callback.message.edit_text(pay_info, reply_markup=keyboard, parse_mode="Markdown")
-
-    except Exception as e:
-        logging.error(f"Payment error: {e}")
-        await callback.answer("❌ Ошибка при формировании реквизитов!", show_alert=True)
-
-# Foydalanuvchi "Я оплатил" tugmasini bosganda bazaga yozish
-@dp.callback_query(F.data.startswith("confirm_"))
-async def confirm_payment(callback: types.CallbackQuery):
-    try:
-        parts = callback.data.split('_', 3)
-        _, amount_str, cat, encoded_url = parts
-        amount = int(amount_str)
-        real_url = decode_url(encoded_url)
-
-        data = {
-            "url": real_url,
-            "cat": cat,
-            "bid": amount,
+        # Supabase-ga e'lonni joylash
+        db_data = {
+            "url": data["url"],
+            "cat": data["category"],
+            "bid": int(data["amount"]),
             "clicks": 0
         }
-        
-        response = supabase.table("entries").insert(data).execute()
+        supabase.table("entries").insert(db_data).execute()
 
-        await callback.message.edit_text(
-            f"✅ **Спасибо! Заявка принята.**\n\n"
-            f"🌐 **Ссылка:** {real_url}\n"
-            f"💰 **Ставка:** {amount:,} so'm\n\n"
-            f"Ваше объявление уже опубликовано на **BIDmesto.lol**!",
-            parse_mode="Markdown"
+        # Adminga xabar
+        await callback.message.edit_caption(
+            caption=callback.message.caption + "\n\n✅ <b>Платёж подтверждён и опубликован на сайте!</b>",
+            parse_mode=ParseMode.HTML
         )
+        # Foydalanuvchiga xabar
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"✅ <b>Ваш платёж подтверждён!</b>\n\nОбъявление <b>{data['url']}</b> успешно опубликовано на сайте BIDmesto.lol!",
+            parse_mode=ParseMode.HTML
+        )
+        await callback.answer("Успешно добавлено в базу!")
 
     except Exception as e:
-        logging.error(f"Confirm error: {e}")
-        await callback.answer("❌ Ошибка при записи в базу данных!", show_alert=True)
+        logging.error(f"Bazaga yozishda xatolik: {e}")
+        await callback.answer("Ошибка при записи в базу!", show_alert=True)
+
+
+# Admin "Отклонить" tugmasini bosganda
+@dp.callback_query(F.data.startswith("reject_"))
+async def admin_reject(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+
+    await callback.message.edit_caption(
+        caption=callback.message.caption + "\n\n❌ <b>Платёж отклонен.</b>",
+        parse_mode=ParseMode.HTML
+    )
+
+    await bot.send_message(
+        chat_id=user_id,
+        text="❌ <b>Ваш платёж не подтверждён.</b>\nЕсли произошла ошибка, свяжитесь с поддержкой."
+    )
+    await callback.answer("Отклонено.")
+
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    print("🤖 Бот успешно запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
